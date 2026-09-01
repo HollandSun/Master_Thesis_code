@@ -15,18 +15,12 @@ rng('shuffle');
 
 %% Participant and session information
 subjectNumber = input('Enter Subject Number: ');
-versionNumber = input(['Enter Version Number ' ...
-    '(1=SHHS, 2=HSSH, 3=SHSH, 4=HSHS): ']);
 
 if ~isscalar(subjectNumber) || ~isnumeric(subjectNumber) || ...
         isnan(subjectNumber) || subjectNumber < 0 || fix(subjectNumber) ~= subjectNumber
     error('Subject number must be one non-negative integer.');
 end
-if ~ismember(versionNumber, 1:4)
-    error('Version number must be 1, 2, 3, or 4.');
-end
 
-orderOptions = {'SHHS', 'HSSH', 'SHSH', 'HSHS'};
 sessionStamp = datestr(now, 'yyyymmdd_HHMMSS');
 scriptRoot   = fileparts(mfilename('fullpath'));
 dataDir      = fullfile(scriptRoot, 'Data');
@@ -35,23 +29,26 @@ if ~exist(dataDir, 'dir'),  mkdir(dataDir);  end
 if ~exist(diaryDir, 'dir'), mkdir(diaryDir); end
 
 p.ExperimentName = 'AttentionShift_LandoltFlash';
-p.ScriptVersion  = '2.0_3delay';
+p.ScriptVersion  = '2.1_8blocks';
 p.Subject        = subjectNumber;
-p.Version        = versionNumber;
+p.Version        = 0; % fixed versions are no longer used; order is randomized
 p.SessionStamp   = sessionStamp;
 p.RandomState    = rng;
-p.BlockOrderCode = orderOptions{versionNumber};
-p.NumBlocks      = 4;
+p.NumBlocks      = 8;
+p.BlockOrderCode = generateRandomBlockOrder(p.NumBlocks);
 
 %% Experimental settings (edit here if the design changes)
 p.TrialsPerBlock               = 80;
-p.MostlyProbability            = 0.70;
+% Adjust the shift/hold ratios for the two block types here. Hold
+% probability is always 1 minus the corresponding shift probability.
+p.ShiftProbabilityMostlyShift  = 0.70;
+p.ShiftProbabilityMostlyHold   = 0.30;
 p.NominalDelayLabels           = {'1-frame', '200-ms', '400-ms'};
 p.NominalDelayMs               = [NaN, 200, 400];
 p.InitialFixationSeconds        = 0.500;
 p.SpatialCueSeconds            = 0.250;
 p.PostSpatialCueRangeSeconds   = [0.500, 1.500];
-p.LetterArraySeconds           = 0.100;
+p.KeepLetterArrayUntilResponse = true;
 p.ResponseDeadlineSeconds      = 1.500;
 p.FlashDurationFrames          = 1;
 p.InterTrialIntervalSeconds    = 1.000;
@@ -59,16 +56,22 @@ p.QuitPressCount               = 3;
 p.QuitMaxInterPressSeconds     = 0.500;
 
 % Congruency x Delay conditions are distributed as evenly as mathematically
-% possible separately within shift and hold trials in every block. With 80
-% trials at a 70/30 split, the two trial-type counts are 56/24: the 56-trial
-% type contributes 9 or 10 trials to each of the six cells, while the
-% 24-trial type contributes exactly 4 trials to every cell.
-nMostly = round(p.TrialsPerBlock * p.MostlyProbability);
-nRarely = p.TrialsPerBlock - nMostly;
+% possible separately within shift and hold trials in every block.
 nCellsWithinTrialType = numel(p.NominalDelayLabels) * 2;
-if nMostly < nCellsWithinTrialType || nRarely < nCellsWithinTrialType
-    error(['Each trial type must have at least one trial in every ' ...
-        'Congruency x Delay cell. Increase TrialsPerBlock.']);
+probabilitiesToCheck = [p.ShiftProbabilityMostlyShift, ...
+    p.ShiftProbabilityMostlyHold];
+if any(probabilitiesToCheck <= 0) || any(probabilitiesToCheck >= 1)
+    error('Both adjustable shift probabilities must be between 0 and 1.');
+end
+for probability = probabilitiesToCheck
+    nShiftToCheck = round(p.TrialsPerBlock * probability);
+    nHoldToCheck = p.TrialsPerBlock - nShiftToCheck;
+    if nShiftToCheck < nCellsWithinTrialType || ...
+            nHoldToCheck < nCellsWithinTrialType
+        error(['Each trial type must have at least one trial in every ' ...
+            'Congruency x Delay cell. Adjust the probabilities or increase ' ...
+            'TrialsPerBlock.']);
+    end
 end
 
 %% Display and stimulus settings
@@ -78,14 +81,14 @@ p.ForegroundColor      = [0, 0, 0];
 % color. Edit all three values together for a lighter/darker gray, or set
 % separate values for a colored flash. Values use the 0-255 range.
 p.FlashLandoltColor    = [64, 64, 64];
-p.PlaceholderRadiusPx  = 135;
+p.PlaceholderRadiusPx  = 160;
 p.PlaceholderLinePx    = 3;
 p.SpatialCueLinePx     = 9;
-p.LandoltOuterRadiusPx = 30;
-p.LandoltInnerRadiusPx = 17;
-p.LandoltGapHalfPx     = 8;
-p.LandoltYOffsetPx     = 35;
-p.ArrayYOffsetPx       = -55;
+p.LandoltOuterRadiusPx = 24;
+p.LandoltInnerRadiusPx = 13;
+p.LandoltGapHalfPx     = 6;
+p.LandoltYOffsetPx     = 40;
+p.ArrayYOffsetPx       = -60;
 p.ArrayTextSizePx      = 72;
 p.InstructionTextSize  = 30;
 
@@ -116,7 +119,6 @@ try
         max(1, round(0.200 / p.ifi)), ...
         max(1, round(0.400 / p.ifi))];  % frame setting
     p.DelayActualMs = p.DelayFrames * p.ifi * 1000;
-    p.LetterArrayFrames = max(1, round(p.LetterArraySeconds / p.ifi));
 
     [screenCx, screenCy] = RectCenter(p.WindowRect);
     horizontalOffset = min(300, RectWidth(p.WindowRect) * 0.24);
@@ -153,6 +155,7 @@ try
         p.MeasuredHz, p.ifi * 1000);
     fprintf('Flash delays scheduled as %d, %d, and %d frames ', p.DelayFrames);
     fprintf('(%.3f, %.3f, %.3f ms).\n', p.DelayActualMs);
+    fprintf('Random block order: %s\n', p.BlockOrderCode);
     fprintf('Keyboard device: %s (index %d)\n\n', ...
         p.KeyboardName, p.KeyboardIndex);
 
@@ -236,9 +239,9 @@ end
     function localCleanup
         Priority(0);
         try
-            if ~isempty(p.KeyboardIndex)
-                KbQueueStop(p.KeyboardIndex);
-                KbQueueRelease(p.KeyboardIndex);
+            if ~isempty(p.KeyboardIndex)  %#ok
+                KbQueueStop(p.KeyboardIndex);  
+                KbQueueRelease(p.KeyboardIndex); 
             end
         catch
         end
@@ -250,6 +253,25 @@ end
 end
 
 
+function blockOrder = generateRandomBlockOrder(numBlocks)
+% Use equal numbers of mostly-shift (S) and mostly-hold (H) blocks. The
+% order is randomized anew for each session, rejecting SSS and HHH runs.
+
+baseOrder = [repmat('S', 1, numBlocks/2), ...
+             repmat('H', 1, numBlocks/2)];
+for attempt = 1:10000 
+    candidate = baseOrder(randperm(numBlocks));
+    hasThreeShift = ~isempty(strfind(candidate, 'SSS')); %#ok<STREMP>
+    hasThreeHold  = ~isempty(strfind(candidate, 'HHH')); %#ok<STREMP>
+    if ~hasThreeShift && ~hasThreeHold
+        blockOrder = candidate;
+        return;
+    end
+end
+error('Could not generate a valid randomized block order.');
+end
+
+
 function trials = buildBlockTrials(p, blockNumber)
 % Distribute Delay x Congruency cells as evenly as possible separately for
 % shift and hold, including balanced delay and congruency margins.
@@ -257,12 +279,12 @@ function trials = buildBlockTrials(p, blockNumber)
 blockCode = p.BlockOrderCode(blockNumber);
 if blockCode == 'S'
     blockLabel = 'mostly-shift';
-    nShift = round(p.TrialsPerBlock * p.MostlyProbability);
+    blockShiftProbability = p.ShiftProbabilityMostlyShift;
 else
     blockLabel = 'mostly-hold';
-    nShift = p.TrialsPerBlock - ...
-        round(p.TrialsPerBlock * p.MostlyProbability);
+    blockShiftProbability = p.ShiftProbabilityMostlyHold;
 end
+nShift = round(p.TrialsPerBlock * blockShiftProbability);
 nHold = p.TrialsPerBlock - nShift;
 
 rows = zeros(p.TrialsPerBlock, 3);
@@ -275,7 +297,7 @@ for trialTypeCode = 1:2 % 1=shift, 2=hold
     cellIndex = 1;
     for delayCondition = 1:numel(p.NominalDelayLabels)
         for congruent = 0:1
-            for repetition = 1:cellCounts(cellIndex) %#ok<NASGU>
+            for repetition = 1:cellCounts(cellIndex) %#ok
                 rows(rowIndex, :) = ...
                     [trialTypeCode, delayCondition, congruent];
                 rowIndex = rowIndex + 1;
@@ -289,17 +311,18 @@ if rowIndex ~= p.TrialsPerBlock + 1
 end
 rows = rows(randperm(size(rows, 1)), :);
 
-% Balance location and direction within every factorial cell to within one
-% trial, while also retaining exact 50/50 balance across the whole block.
-initialSides      = balancedWithinCells(rows);
+% Balance response-relevant and neutral directions within every factorial
+% cell to within one trial, while retaining 50/50 balance across the block.
 targetDirections  = balancedWithinCells(rows);
 neutralDirections = balancedWithinCells(rows) + 2; % 3=up, 4=down
 
 trials = repmat(emptyPlannedTrial(), 1, p.TrialsPerBlock);
+currentAttendedLocation = randi(2); % first trial starts randomly
 for t = 1:p.TrialsPerBlock
     tr = emptyPlannedTrial();
     tr.BlockTypeCode   = blockCode;
     tr.BlockType       = blockLabel;
+    tr.BlockShiftProbability = blockShiftProbability;
     tr.TrialTypeCode   = rows(t, 1);
     if tr.TrialTypeCode == 1
         tr.TrialType = 'shift';
@@ -318,12 +341,17 @@ for t = 1:p.TrialsPerBlock
         tr.Congruency = 'incongruent';
     end
 
-    tr.InitialLocation = initialSides(t); % 1=left, 2=right
+    % Trial t begins wherever attention ended on trial t-1. A hold leaves
+    % that position unchanged; a shift makes the opposite side the new end
+    % position and therefore the start of the following trial.
+    tr.InitialLocation = currentAttendedLocation; % 1=left, 2=right
     if tr.TrialTypeCode == 1
         tr.TargetLocation = 3 - tr.InitialLocation;
     else
         tr.TargetLocation = tr.InitialLocation;
     end
+    tr.EndLocation = tr.TargetLocation;
+    currentAttendedLocation = tr.EndLocation;
     tr.DistractorLocation = 3 - tr.TargetLocation;
 
     tr.TargetDirection = targetDirections(t); % 1=left, 2=right
@@ -337,7 +365,6 @@ for t = 1:p.TrialsPerBlock
     [tr.AttendedArray, tr.UnattendedArray] = ...
         makeLetterArrays(tr.TrialTypeCode);
     trials(t) = tr;
-end
 end
 
 
@@ -413,8 +440,7 @@ end
 
 
 function [attendedArray, unattendedArray] = makeLetterArrays(trialTypeCode)
-% Filler letters exclude C, H, and S. The attended array contains exactly
-% one critical H or S; its within-array position is randomized.
+
 fillerLetters = 'ABDEFGIJKLMNOPQRTUVWXYZ';
 if trialTypeCode == 1
     criticalLetter = 'S';
@@ -440,6 +466,7 @@ result.Version            = p.Version;
 result.Block              = blockNumber;
 result.BlockTypeCode      = tr.BlockTypeCode;
 result.BlockType          = tr.BlockType;
+result.BlockShiftProbability = tr.BlockShiftProbability;
 result.Trial              = trialNumber;
 result.TrialTypeCode      = tr.TrialTypeCode;
 result.TrialType          = tr.TrialType;
@@ -451,6 +478,7 @@ result.NominalDelayMs     = tr.NominalDelayMs;
 result.DelayFrames        = tr.DelayFrames;
 result.ScheduledDelayMs   = tr.ScheduledDelayMs;
 result.InitialLocation    = tr.InitialLocation;
+result.EndLocation        = tr.EndLocation;
 result.TargetLocation     = tr.TargetLocation;
 result.DistractorLocation = tr.DistractorLocation;
 result.TargetDirection    = directionName(tr.TargetDirection);
@@ -495,8 +523,12 @@ KbQueueStart(p.KeyboardIndex);
     result.ShiftCueMissed] = Screen('Flip', window, ...
     shiftCueDeadline - p.slack);
 
-letterOffsetDue = result.ShiftCueOnset + ...
-    p.LetterArrayFrames * p.ifi;
+if p.KeepLetterArrayUntilResponse
+    letterOffsetDue = inf;
+else
+    error(['KeepLetterArrayUntilResponse must remain true unless an ' ...
+        'explicit finite letter-array duration is implemented.']);
+end
 flashDue = result.ShiftCueOnset + tr.DelayFrames * p.ifi;
 responseDeadline = result.ShiftCueOnset + p.ResponseDeadlineSeconds;
 flashOffsetDue = inf;
@@ -934,6 +966,7 @@ function tr = emptyPlannedTrial
 tr = struct( ...
     'BlockTypeCode', '', ...
     'BlockType', '', ...
+    'BlockShiftProbability', NaN, ...
     'TrialTypeCode', NaN, ...
     'TrialType', '', ...
     'DelayCondition', NaN, ...
@@ -944,6 +977,7 @@ tr = struct( ...
     'Congruent', NaN, ...
     'Congruency', '', ...
     'InitialLocation', NaN, ...
+    'EndLocation', NaN, ...
     'TargetLocation', NaN, ...
     'DistractorLocation', NaN, ...
     'TargetDirection', NaN, ...
@@ -961,6 +995,7 @@ result = struct( ...
     'Block', NaN, ...
     'BlockTypeCode', '', ...
     'BlockType', '', ...
+    'BlockShiftProbability', NaN, ...
     'Trial', NaN, ...
     'TrialTypeCode', NaN, ...
     'TrialType', '', ...
@@ -972,6 +1007,7 @@ result = struct( ...
     'DelayFrames', NaN, ...
     'ScheduledDelayMs', NaN, ...
     'InitialLocation', NaN, ...
+    'EndLocation', NaN, ...
     'TargetLocation', NaN, ...
     'DistractorLocation', NaN, ...
     'TargetDirection', '', ...
