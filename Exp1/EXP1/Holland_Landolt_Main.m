@@ -7,7 +7,7 @@ function p = Holland_Landolt_Main
 % Response mapping:
 %   Z = left-facing target
 %   M = right-facing target
-%   Q or ESCAPE = end the experiment early
+%   Q three times rapidly = end the experiment early
 
 AssertOpenGL;
 KbName('UnifyKeyNames');
@@ -54,6 +54,9 @@ p.PostSpatialCueRangeSeconds   = [0.500, 1.500];
 p.LetterArraySeconds           = 0.100;
 p.ResponseDeadlineSeconds      = 1.500;
 p.FlashDurationFrames          = 1;
+p.InterTrialIntervalSeconds    = 1.000;
+p.QuitPressCount               = 3;
+p.QuitMaxInterPressSeconds     = 0.500;
 
 % Congruency x Delay conditions are distributed as evenly as mathematically
 % possible separately within shift and hold trials in every block. With 80
@@ -70,20 +73,20 @@ end
 
 %% Display and stimulus settings
 p.BackgroundColor      = [128, 128, 128];
-p.ForegroundColor      = [255, 255, 255];
+p.ForegroundColor      = [0, 0, 0];
 % During the one-frame flash, the distractor Landolt-C itself uses this RGB
 % color. Edit all three values together for a lighter/darker gray, or set
 % separate values for a colored flash. Values use the 0-255 range.
-p.FlashLandoltColor    = [192, 192, 192];
-p.PlaceholderRadiusPx  = 105;
+p.FlashLandoltColor    = [64, 64, 64];
+p.PlaceholderRadiusPx  = 135;
 p.PlaceholderLinePx    = 3;
 p.SpatialCueLinePx     = 9;
 p.LandoltOuterRadiusPx = 30;
 p.LandoltInnerRadiusPx = 17;
 p.LandoltGapHalfPx     = 8;
-p.LandoltYOffsetPx     = 25;
-p.ArrayYOffsetPx       = -42;
-p.ArrayTextSizePx      = 34;
+p.LandoltYOffsetPx     = 35;
+p.ArrayYOffsetPx       = -55;
+p.ArrayTextSizePx      = 72;
 p.InstructionTextSize  = 30;
 
 p.OutputBase = fullfile(dataDir, sprintf('S%03d_%s', ...
@@ -96,7 +99,7 @@ p.KeyboardIndex = [];
 cleanupObject = onCleanup(@localCleanup); %#ok<NASGU>
 
 try
-    PsychDefaultSetup(1); % unified key names, while retaining 0-255 colors
+    PsychDefaultSetup(1); 
     screens        = Screen('Screens');
     p.ScreenNumber = max(screens);
     [window, p.WindowRect] = Screen('OpenWindow', p.ScreenNumber, ...
@@ -111,7 +114,7 @@ try
     p.slack        = p.ifi / 2;
     p.DelayFrames  = [1, ...
         max(1, round(0.200 / p.ifi)), ...
-        max(1, round(0.400 / p.ifi))];
+        max(1, round(0.400 / p.ifi))];  % frame setting
     p.DelayActualMs = p.DelayFrames * p.ifi * 1000;
     p.LetterArrayFrames = max(1, round(p.LetterArraySeconds / p.ifi));
 
@@ -141,10 +144,9 @@ try
     p.Key.Z      = KbName('z');
     p.Key.M      = KbName('m');
     p.Key.Q      = KbName('q');
-    p.Key.Escape = KbName('ESCAPE');
     p.Key.Space  = KbName('space');
     keyList = zeros(1, 256);
-    keyList([p.Key.Z, p.Key.M, p.Key.Q, p.Key.Escape]) = 1;
+    keyList([p.Key.Z, p.Key.M]) = 1;
     KbQueueCreate(p.KeyboardIndex, keyList);
 
     fprintf('\nMonitor: %.3f Hz (IFI %.4f ms)\n', ...
@@ -430,6 +432,7 @@ end
 function [result, quitRequested] = runTrial(window, p, tr, blockNumber, trialNumber)
 result = emptyTrialResult();
 quitRequested = false;
+rapidQuitDetected(p, true);
 
 % Copy all planned factors into the trial-level result.
 result.Subject            = p.Subject;
@@ -625,11 +628,15 @@ else
     fprintf('%d\n', result.Accuracy);
 end
 
-% Remove the trial display immediately; the next trial supplies the 500-ms
-% fixation period before its spatial cue.
+% Remove the trial display, then hold the fixation/placeholders for the
+% configurable inter-trial interval. A valid rapid triple-Q still works
+% during this interval.
 drawBaseDisplay(window, p, 0);
-Screen('Flip', window);
+[~, interTrialOnset] = Screen('Flip', window);
 KbQueueFlush(p.KeyboardIndex);
+if ~quitRequested
+    quitRequested = waitInterTrialInterval(p, interTrialOnset);
+end
 end
 
 
@@ -637,11 +644,23 @@ function [responseCode, responseTime] = pollForResponse(p, minTime, stopTime, ma
 responseCode = 0;
 responseTime = NaN;
 while GetSecs < stopTime
+    [quitNow, quitTime] = rapidQuitDetected(p, false);
+    if quitNow
+        responseCode = p.Key.Q;
+        responseTime = quitTime;
+        return;
+    end
     [responseCode, responseTime] = readQueuedResponse(p, minTime, maxTime);
     if responseCode ~= 0
         return;
     end
     WaitSecs('YieldSecs', 0.001);
+end
+[quitNow, quitTime] = rapidQuitDetected(p, false);
+if quitNow
+    responseCode = p.Key.Q;
+    responseTime = quitTime;
+    return;
 end
 [responseCode, responseTime] = readQueuedResponse(p, minTime, maxTime);
 end
@@ -655,13 +674,68 @@ if ~responded
     return;
 end
 
-allowedCodes = [p.Key.Z, p.Key.M, p.Key.Q, p.Key.Escape];
+allowedCodes = [p.Key.Z, p.Key.M];
 pressTimes = firstPress(allowedCodes);
 isEligible = pressTimes >= minTime & pressTimes <= maxTime;
 if any(isEligible)
     eligibleIndices = find(isEligible);
     [responseTime, relativeIndex] = min(pressTimes(eligibleIndices));
     responseCode = allowedCodes(eligibleIndices(relativeIndex));
+end
+end
+
+
+function [quitDetected, detectionTime] = rapidQuitDetected(p, resetState)
+% A held Q counts only once. Three distinct Q down-events are required,
+% with no more than QuitMaxInterPressSeconds between adjacent presses.
+persistent qPressCount lastQPressTime qWasDown activeKeyboardIndex
+
+if resetState || isempty(activeKeyboardIndex) || ...
+        activeKeyboardIndex ~= p.KeyboardIndex
+    qPressCount = 0;
+    lastQPressTime = NaN;
+    qWasDown = false;
+    activeKeyboardIndex = p.KeyboardIndex;
+    quitDetected = false;
+    detectionTime = NaN;
+    return;
+end
+
+quitDetected = false;
+detectionTime = NaN;
+[~, checkTime, keyCode] = KbCheck(p.KeyboardIndex);
+qIsDown = keyCode(p.Key.Q);
+
+if qIsDown && ~qWasDown
+    if isnan(lastQPressTime) || ...
+            checkTime - lastQPressTime > p.QuitMaxInterPressSeconds
+        qPressCount = 1;
+    else
+        qPressCount = qPressCount + 1;
+    end
+    lastQPressTime = checkTime;
+
+    if qPressCount >= p.QuitPressCount
+        quitDetected = true;
+        detectionTime = checkTime;
+        qPressCount = 0;
+        lastQPressTime = NaN;
+    end
+end
+qWasDown = qIsDown;
+end
+
+
+function quitRequested = waitInterTrialInterval(p, intervalStart)
+quitRequested = false;
+intervalEnd = intervalStart + p.InterTrialIntervalSeconds;
+while GetSecs < intervalEnd
+    [quitNow, ~] = rapidQuitDetected(p, false);
+    if quitNow
+        quitRequested = true;
+        return;
+    end
+    WaitSecs('YieldSecs', 0.001);
 end
 end
 
@@ -769,7 +843,8 @@ message = sprintf(['Block %d of %d\n\n' ...
     'Use the letter array at the cued location:\n' ...
     'S = shift attention, H = hold attention.\n\n' ...
     'Report the target Landolt-C gap:\n' ...
-    'Z = left, M = right.\n\n' ...
+    'Z = left, M = right.\n' ...
+    'To end early, press Q three times rapidly.\n\n' ...
     'Press SPACE to begin.'], blockNumber, p.NumBlocks);
 DrawFormattedText(window, message, 'center', 'center', p.ForegroundColor, 70);
 Screen('Flip', window);
@@ -806,13 +881,17 @@ choice = '';
 while KbCheck(p.KeyboardIndex)
     WaitSecs('YieldSecs', 0.01);
 end
+rapidQuitDetected(p, true);
 while isempty(choice)
+    [quitNow, ~] = rapidQuitDetected(p, false);
+    if quitNow
+        choice = 'quit';
+        break;
+    end
     [isDown, ~, keyCode] = KbCheck(p.KeyboardIndex);
     if isDown
         if keyCode(p.Key.Space)
             choice = 'space';
-        elseif keyCode(p.Key.Q) || keyCode(p.Key.Escape)
-            choice = 'quit';
         end
         while KbCheck(p.KeyboardIndex)
             WaitSecs('YieldSecs', 0.01);
