@@ -7,7 +7,7 @@ function p = Holland_Landolt_Main
 % Response mapping:
 %   Z = left-facing target
 %   M = right-facing target
-%   Q three times rapidly = end the experiment early
+%   ESCAPE three times rapidly = end the experiment early
 
 AssertOpenGL;
 KbName('UnifyKeyNames');
@@ -29,7 +29,7 @@ if ~exist(dataDir, 'dir'),  mkdir(dataDir);  end
 if ~exist(diaryDir, 'dir'), mkdir(diaryDir); end
 
 p.ExperimentName = 'AttentionShift_LandoltFlash';
-p.ScriptVersion  = '2.1_8blocks';
+p.ScriptVersion  = '2.2_simple_flash';
 p.Subject        = subjectNumber;
 p.Version        = 0; % fixed versions are no longer used; order is randomized
 p.SessionStamp   = sessionStamp;
@@ -48,9 +48,12 @@ p.NominalDelayMs               = [NaN, 200, 400];
 p.InitialFixationSeconds        = 0.500;
 p.SpatialCueSeconds            = 0.250;
 p.PostSpatialCueRangeSeconds   = [0.500, 1.500];
-p.KeepLetterArrayUntilResponse = true;
 p.ResponseDeadlineSeconds      = 1.500;
+% FLASH SETTINGS: change these two values to adjust duration and contrast.
+% Duration is an integer number of monitor frames. Contrast 0 matches the
+% gray background; contrast 1 matches the ordinary black Landolt-C.
 p.FlashDurationFrames          = 1;
+p.FlashContrast                = 0.50;
 p.InterTrialIntervalSeconds    = 1.000;
 p.QuitPressCount               = 3;
 p.QuitMaxInterPressSeconds     = 0.500;
@@ -77,19 +80,18 @@ end
 %% Display and stimulus settings
 p.BackgroundColor      = [128, 128, 128];
 p.ForegroundColor      = [0, 0, 0];
-% During the one-frame flash, the distractor Landolt-C itself uses this RGB
-% color. Edit all three values together for a lighter/darker gray, or set
-% separate values for a colored flash. Values use the 0-255 range.
-p.FlashLandoltColor    = [64, 64, 64];
-p.PlaceholderRadiusPx  = 160;
-p.PlaceholderLinePx    = 3;
-p.SpatialCueLinePx     = 9;
-p.LandoltOuterRadiusPx = 24;
-p.LandoltInnerRadiusPx = 13;
-p.LandoltGapHalfPx     = 6;
-p.LandoltYOffsetPx     = 40;
-p.ArrayYOffsetPx       = -60;
-p.ArrayTextSizePx      = 72;
+% Convert FlashContrast into a gray Landolt-C RGB value.
+p.FlashLandoltColor    = round(p.BackgroundColor + p.FlashContrast .* ...
+    (p.ForegroundColor - p.BackgroundColor));
+p.PlaceholderRadiusPx  = 220;
+p.PlaceholderLinePx    = 4;
+p.SpatialCueLinePx     = 11;
+p.LandoltOuterRadiusPx = 15;
+p.LandoltInnerRadiusPx = 8;
+p.LandoltGapHalfPx     = 4;
+p.LandoltYOffsetPx     = 35;
+p.ArrayYOffsetPx       = -40;
+p.ArrayTextSizePx      = 64;
 p.InstructionTextSize  = 30;
 
 p.OutputBase = fullfile(dataDir, sprintf('S%03d_%s', ...
@@ -121,7 +123,12 @@ try
     p.DelayActualMs = p.DelayFrames * p.ifi * 1000;
 
     [screenCx, screenCy] = RectCenter(p.WindowRect);
-    horizontalOffset = min(300, RectWidth(p.WindowRect) * 0.24);
+    % Move the two large placeholders farther toward the screen edges.
+    horizontalOffset = min(430, RectWidth(p.WindowRect) * 0.30);
+    % Keep the requested 220-px radius on normal lab displays, but prevent
+    % clipping if the script is briefly run on a much narrower screen.
+    availableRadius = floor(RectWidth(p.WindowRect)/2 - horizontalOffset - 20);
+    p.PlaceholderRadiusPx = min(p.PlaceholderRadiusPx, availableRadius);
     p.CenterXY = [screenCx, screenCy];
     p.LocationXY = [screenCx - horizontalOffset, screenCy; ...
                     screenCx + horizontalOffset, screenCy];
@@ -145,7 +152,7 @@ try
 
     p.Key.Z      = KbName('z');
     p.Key.M      = KbName('m');
-    p.Key.Q      = KbName('q');
+    p.Key.Escape = KbName('ESCAPE');
     p.Key.Space  = KbName('space');
     keyList = zeros(1, 256);
     keyList([p.Key.Z, p.Key.M]) = 1;
@@ -510,12 +517,9 @@ result.PostSpatialCueIntervalMs = postCueInterval * 1000;
 shiftCueDeadline = spatialCueOffset + postCueInterval;
 
 % From this onset onward the target is response-effective and the
-% task-irrelevant Landolt C is response-neutral.
-showLetters = true;
-distractorEffective = false;
-flashVisible = false;
-drawStimulusDisplay(window, p, tr, showLetters, ...
-    distractorEffective, flashVisible);
+% task-irrelevant Landolt C is response-neutral. The letter arrays are
+% always drawn and remain unchanged through every following display.
+drawStimulusDisplay(window, p, tr, false, false);
 
 KbQueueFlush(p.KeyboardIndex);
 KbQueueStart(p.KeyboardIndex);
@@ -523,99 +527,47 @@ KbQueueStart(p.KeyboardIndex);
     result.ShiftCueMissed] = Screen('Flip', window, ...
     shiftCueDeadline - p.slack);
 
-if p.KeepLetterArrayUntilResponse
-    letterOffsetDue = inf;
-else
-    error(['KeepLetterArrayUntilResponse must remain true unless an ' ...
-        'explicit finite letter-array duration is implemented.']);
-end
 flashDue = result.ShiftCueOnset + tr.DelayFrames * p.ifi;
 responseDeadline = result.ShiftCueOnset + p.ResponseDeadlineSeconds;
-flashOffsetDue = inf;
-
 result.ScheduledFlashOnset = flashDue;
 result.ResponseDeadline = responseDeadline;
 
-responseCode = 0;
-responseTime = NaN;
-timedOut = false;
+% Flash is never cancelled by an early response. At flash onset, the
+% distractor becomes response-effective and gray; the letter arrays remain
+% exactly the same. The gray C lasts for the configured number of frames.
+drawStimulusDisplay(window, p, tr, true, true);
+[~, result.ActualFlashOnset, ~, result.FlashOnsetMissed] = ...
+    Screen('Flip', window, flashDue - p.slack);
+result.FlashPresented = true;
+result.ActualFlashDelayMs = ...
+    (result.ActualFlashOnset - result.ShiftCueOnset) * 1000;
 
-while responseCode == 0 && ~timedOut
-    pendingTimes = responseDeadline;
-    if showLetters
-        pendingTimes(end+1) = letterOffsetDue; %#ok<AGROW>
-    end
-    if ~result.FlashPresented
-        pendingTimes(end+1) = flashDue; %#ok<AGROW>
-    end
-    if flashVisible
-        pendingTimes(end+1) = flashOffsetDue; %#ok<AGROW>
-    end
-    nextDue = min(pendingTimes);
+flashOffsetDue = result.ActualFlashOnset + ...
+    p.FlashDurationFrames * p.ifi;
+drawStimulusDisplay(window, p, tr, true, false);
+[~, result.FlashOffsetOnset, ~, result.FlashOffsetMissed] = ...
+    Screen('Flip', window, flashOffsetDue - p.slack);
 
-    isResponseDeadline = abs(nextDue - responseDeadline) < p.ifi / 4;
-    isLetterOffset = showLetters && ...
-        abs(nextDue - letterOffsetDue) < p.ifi / 4;
-    isFlashOnset = ~result.FlashPresented && ...
-        abs(nextDue - flashDue) < p.ifi / 4;
-    isFlashOffset = flashVisible && ...
-        abs(nextDue - flashOffsetDue) < p.ifi / 4;
-
-    % Prepare the next visual state in the back buffer before polling.
-    nextShowLetters = showLetters && ~isLetterOffset;
-    nextDistractorEffective = distractorEffective || isFlashOnset;
-    nextFlashVisible = (flashVisible || isFlashOnset) && ~isFlashOffset;
-    if ~isResponseDeadline
-        drawStimulusDisplay(window, p, tr, nextShowLetters, ...
-            nextDistractorEffective, nextFlashVisible);
-        pollStop = max(GetSecs, nextDue - p.ifi / 2);
-    else
-        pollStop = nextDue;
-    end
-
+% Check the response queue only after the obligatory flash. A response made
+% before the flash is still retained with its original timestamp and RT.
+[responseCode, responseTime] = readQueuedResponse( ...
+    p, result.ShiftCueOnset, responseDeadline);
+if responseCode == 0 && GetSecs < responseDeadline
     [responseCode, responseTime] = pollForResponse( ...
-        p, result.ShiftCueOnset, pollStop, nextDue);
-    if responseCode ~= 0
-        break;
-    end
-
-    if isResponseDeadline
-        timedOut = true;
-        break;
-    end
-
-    [~, eventOnset, ~, eventMissed] = Screen('Flip', ...
-        window, nextDue - p.slack);
-    showLetters = nextShowLetters;
-    distractorEffective = nextDistractorEffective;
-    flashVisible = nextFlashVisible;
-
-    if isLetterOffset
-        result.LetterOffsetOnset = eventOnset;
-        result.LetterOffsetMissed = eventMissed;
-    end
-    if isFlashOnset
-        result.FlashPresented = true;
-        result.ActualFlashOnset = eventOnset;
-        result.ActualFlashDelayMs = ...
-            (eventOnset - result.ShiftCueOnset) * 1000;
-        result.FlashOnsetMissed = eventMissed;
-        flashOffsetDue = eventOnset + p.FlashDurationFrames * p.ifi;
-    end
-    if isFlashOffset
-        result.FlashOffsetOnset = eventOnset;
-        result.FlashOffsetMissed = eventMissed;
-    end
-
-    % Capture a response made during Screen('Flip')'s final wait.
-    [responseCode, responseTime] = readQueuedResponse( ...
-        p, result.ShiftCueOnset, GetSecs);
+        p, result.ShiftCueOnset, responseDeadline, responseDeadline);
 end
+timedOut = responseCode == 0;
 
 KbQueueStop(p.KeyboardIndex);
 
 result.TimedOut = timedOut;
-if responseCode ~= 0
+if responseCode == p.Key.Escape
+    % Triple-ESC is a task-level abort, not a trial response.
+    result.ResponseKey = 'task-abort';
+    result.ResponseDirection = '';
+    result.Accuracy = NaN;
+    quitRequested = true;
+elseif responseCode ~= 0
     result.ResponseTime = responseTime;
     result.RT = responseTime - result.ShiftCueOnset;
 
@@ -627,16 +579,8 @@ if responseCode ~= 0
         result.ResponseKey = 'm';
         result.ResponseDirection = 'right';
         result.Accuracy = double(tr.TargetDirection == 2);
-    else
-        result.ResponseKey = 'quit';
-        result.ResponseDirection = '';
-        result.Accuracy = NaN;
-        quitRequested = true;
     end
 
-    if ~result.FlashPresented && ~quitRequested
-        result.ResponsePreemptedNoFlash = true;
-    end
 end
 
 if timedOut
@@ -661,7 +605,7 @@ else
 end
 
 % Remove the trial display, then hold the fixation/placeholders for the
-% configurable inter-trial interval. A valid rapid triple-Q still works
+% configurable inter-trial interval. A valid rapid triple-ESC still works
 % during this interval.
 drawBaseDisplay(window, p, 0);
 [~, interTrialOnset] = Screen('Flip', window);
@@ -678,7 +622,7 @@ responseTime = NaN;
 while GetSecs < stopTime
     [quitNow, quitTime] = rapidQuitDetected(p, false);
     if quitNow
-        responseCode = p.Key.Q;
+        responseCode = p.Key.Escape;
         responseTime = quitTime;
         return;
     end
@@ -690,7 +634,7 @@ while GetSecs < stopTime
 end
 [quitNow, quitTime] = rapidQuitDetected(p, false);
 if quitNow
-    responseCode = p.Key.Q;
+    responseCode = p.Key.Escape;
     responseTime = quitTime;
     return;
 end
@@ -718,15 +662,15 @@ end
 
 
 function [quitDetected, detectionTime] = rapidQuitDetected(p, resetState)
-% A held Q counts only once. Three distinct Q down-events are required,
+% A held ESCAPE counts only once. Three distinct ESCAPE down-events are required,
 % with no more than QuitMaxInterPressSeconds between adjacent presses.
-persistent qPressCount lastQPressTime qWasDown activeKeyboardIndex
+persistent escapePressCount lastEscapePressTime escapeWasDown activeKeyboardIndex
 
 if resetState || isempty(activeKeyboardIndex) || ...
         activeKeyboardIndex ~= p.KeyboardIndex
-    qPressCount = 0;
-    lastQPressTime = NaN;
-    qWasDown = false;
+    escapePressCount = 0;
+    lastEscapePressTime = NaN;
+    escapeWasDown = false;
     activeKeyboardIndex = p.KeyboardIndex;
     quitDetected = false;
     detectionTime = NaN;
@@ -736,25 +680,25 @@ end
 quitDetected = false;
 detectionTime = NaN;
 [~, checkTime, keyCode] = KbCheck(p.KeyboardIndex);
-qIsDown = keyCode(p.Key.Q);
+escapeIsDown = keyCode(p.Key.Escape);
 
-if qIsDown && ~qWasDown
-    if isnan(lastQPressTime) || ...
-            checkTime - lastQPressTime > p.QuitMaxInterPressSeconds
-        qPressCount = 1;
+if escapeIsDown && ~escapeWasDown
+    if isnan(lastEscapePressTime) || ...
+            checkTime - lastEscapePressTime > p.QuitMaxInterPressSeconds
+        escapePressCount = 1;
     else
-        qPressCount = qPressCount + 1;
+        escapePressCount = escapePressCount + 1;
     end
-    lastQPressTime = checkTime;
+    lastEscapePressTime = checkTime;
 
-    if qPressCount >= p.QuitPressCount
+    if escapePressCount >= p.QuitPressCount
         quitDetected = true;
         detectionTime = checkTime;
-        qPressCount = 0;
-        lastQPressTime = NaN;
+        escapePressCount = 0;
+        lastEscapePressTime = NaN;
     end
 end
-qWasDown = qIsDown;
+escapeWasDown = escapeIsDown;
 end
 
 
@@ -786,24 +730,23 @@ drawFixation(window, p);
 end
 
 
-function drawStimulusDisplay(window, p, tr, showLetters, ...
-    distractorEffective, flashVisible)
+function drawStimulusDisplay(window, p, tr, distractorEffective, flashVisible)
 drawBaseDisplay(window, p, 0);
 
-if showLetters
-    if tr.InitialLocation == 1
-        leftArray  = tr.AttendedArray;
-        rightArray = tr.UnattendedArray;
-    else
-        leftArray  = tr.UnattendedArray;
-        rightArray = tr.AttendedArray;
-    end
-    Screen('TextSize', window, p.ArrayTextSizePx);
-    drawCenteredTextAt(window, leftArray, p.LocationXY(1, 1), ...
-        p.LocationXY(1, 2) + p.ArrayYOffsetPx, p.ForegroundColor);
-    drawCenteredTextAt(window, rightArray, p.LocationXY(2, 1), ...
-        p.LocationXY(2, 2) + p.ArrayYOffsetPx, p.ForegroundColor);
+% Letter arrays are unconditional: target onset, flash, post-flash, and the
+% remaining response window all use the same arrays in the same color.
+if tr.InitialLocation == 1
+    leftArray  = tr.AttendedArray;
+    rightArray = tr.UnattendedArray;
+else
+    leftArray  = tr.UnattendedArray;
+    rightArray = tr.AttendedArray;
 end
+Screen('TextSize', window, p.ArrayTextSizePx);
+drawCenteredTextAt(window, leftArray, p.LocationXY(1, 1), ...
+    p.LocationXY(1, 2) + p.ArrayYOffsetPx, p.ForegroundColor);
+drawCenteredTextAt(window, rightArray, p.LocationXY(2, 1), ...
+    p.LocationXY(2, 2) + p.ArrayYOffsetPx, p.ForegroundColor);
 
 targetXY = p.LocationXY(tr.TargetLocation, :) + [0, p.LandoltYOffsetPx];
 distractorXY = p.LocationXY(tr.DistractorLocation, :) + [0, p.LandoltYOffsetPx];
@@ -876,7 +819,7 @@ message = sprintf(['Block %d of %d\n\n' ...
     'S = shift attention, H = hold attention.\n\n' ...
     'Report the target Landolt-C gap:\n' ...
     'Z = left, M = right.\n' ...
-    'To end early, press Q three times rapidly.\n\n' ...
+    'To end early, press ESCAPE three times rapidly.\n\n' ...
     'Press SPACE to begin.'], blockNumber, p.NumBlocks);
 DrawFormattedText(window, message, 'center', 'center', p.ForegroundColor, 70);
 Screen('Flip', window);
@@ -1024,8 +967,6 @@ result = struct( ...
     'ShiftCueVBL', NaN, ...
     'ShiftCueOnset', NaN, ...
     'ShiftCueMissed', NaN, ...
-    'LetterOffsetOnset', NaN, ...
-    'LetterOffsetMissed', NaN, ...
     'ScheduledFlashOnset', NaN, ...
     'ActualFlashOnset', NaN, ...
     'ActualFlashDelayMs', NaN, ...
@@ -1033,7 +974,6 @@ result = struct( ...
     'FlashOffsetOnset', NaN, ...
     'FlashOffsetMissed', NaN, ...
     'FlashPresented', false, ...
-    'ResponsePreemptedNoFlash', false, ...
     'ResponseDeadline', NaN, ...
     'ResponseTime', NaN, ...
     'ResponseKey', '', ...
