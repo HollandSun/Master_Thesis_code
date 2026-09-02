@@ -48,6 +48,7 @@ p.NominalDelayMs               = [NaN, 200, 400];
 p.InitialFixationSeconds        = 0.500;
 p.SpatialCueSeconds            = 0.250;
 p.PostSpatialCueRangeSeconds   = [0.500, 1.500];
+p.LetterArrayDurationSeconds   = 0.200;
 p.ResponseDeadlineSeconds      = 1.500;
 % Both Landolt-Cs flash pure white for five monitor frames.
 p.FlashDurationFrames          = 5;
@@ -86,7 +87,7 @@ p.LandoltInnerRadiusPx = 8;
 p.LandoltGapHalfPx     = 4;
 p.LandoltYOffsetPx     = 105;
 p.ArrayYOffsetPx       = -105;
-p.ArrayTextSizePx      = 64;
+p.ArrayTextSizePx      = 48;
 p.InstructionTextSize  = 30;
 
 p.OutputBase = fullfile(dataDir, sprintf('S%03d_%s', ...
@@ -116,11 +117,13 @@ try
         max(1, round(0.200 / p.ifi)), ...
         max(1, round(0.400 / p.ifi))];  % frame setting
     p.DelayActualMs = p.DelayFrames * p.ifi * 1000;
+    p.LetterArrayDurationFrames = max(1, ...
+        round(p.LetterArrayDurationSeconds / p.ifi));
 
     [screenCx, screenCy] = RectCenter(p.WindowRect);
     % Move the two large placeholders farther toward the screen edges.
     horizontalOffset = min(430, RectWidth(p.WindowRect) * 0.30);
-    % Keep the requested 220-px radius on normal lab displays, but prevent
+    % Keep the requested 260-px radius on normal lab displays, but prevent
     % clipping if the script is briefly run on a much narrower screen.
     availableRadius = floor(RectWidth(p.WindowRect)/2 - horizontalOffset - 20);
     p.PlaceholderRadiusPx = min(p.PlaceholderRadiusPx, availableRadius);
@@ -451,7 +454,7 @@ else
     criticalLetter = 'H';
 end
 
-criticalPosition = randi(3);
+criticalPosition = 2; % S/H always occupies the middle of the 3-letter array
 attendedArray = fillerLetters(randi(numel(fillerLetters), 1, 3));
 attendedArray(criticalPosition) = criticalLetter;
 unattendedArray = fillerLetters(randi(numel(fillerLetters), 1, 3));
@@ -513,9 +516,9 @@ result.PostSpatialCueIntervalMs = postCueInterval * 1000;
 shiftCueDeadline = spatialCueOffset + postCueInterval;
 
 % From this onset onward the target is response-effective and the
-% task-irrelevant Landolt C is response-neutral. The letter arrays are
-% always drawn and remain unchanged through every following display.
-drawStimulusDisplay(window, p, tr, false, false);
+% task-irrelevant Landolt C is response-neutral. The S/H letter arrays are
+% initially visible and remain unchanged until their fixed 200-ms offset.
+drawStimulusDisplay(window, p, tr, false, false, true);
 
 KbQueueFlush(p.KeyboardIndex);
 KbQueueStart(p.KeyboardIndex);
@@ -524,26 +527,69 @@ KbQueueStart(p.KeyboardIndex);
     shiftCueDeadline - p.slack);
 
 flashDue = result.ShiftCueOnset + tr.DelayFrames * p.ifi;
+letterArrayOffsetDue = result.ShiftCueOnset + ...
+    p.LetterArrayDurationFrames * p.ifi;
 responseDeadline = result.ShiftCueOnset + p.ResponseDeadlineSeconds;
 result.ScheduledFlashOnset = flashDue;
 result.ResponseDeadline = responseDeadline;
 
-% Flash is never cancelled by an early response. At flash onset, both Cs
-% turn pure white simultaneously and the distractor becomes response-effective;
-% the letter arrays remain exactly the same. The white display lasts five
-% monitor frames.
-drawStimulusDisplay(window, p, tr, true, true);
-[~, result.ActualFlashOnset, ~, result.FlashOnsetMissed] = ...
-    Screen('Flip', window, flashDue - p.slack);
-result.FlashPresented = true;
-result.ActualFlashDelayMs = ...
-    (result.ActualFlashOnset - result.ShiftCueOnset) * 1000;
+% Run the three obligatory visual events in time order: letter-array
+% offset, flash onset, and flash offset. Equal-time events share one flip.
+showLetters = true;
+distractorEffective = false;
+flashVisible = false;
+letterOffsetDone = false;
+flashOnDone = false;
+flashOffDone = false;
+flashOffsetDue = inf;
 
-flashOffsetDue = result.ActualFlashOnset + ...
-    p.FlashDurationFrames * p.ifi;
-drawStimulusDisplay(window, p, tr, true, false);
-[~, result.FlashOffsetOnset, ~, result.FlashOffsetMissed] = ...
-    Screen('Flip', window, flashOffsetDue - p.slack);
+while ~(letterOffsetDone && flashOffDone)
+    eventTimes = [];
+    if ~letterOffsetDone, eventTimes(end+1) = letterArrayOffsetDue; end %#ok<AGROW>
+    if ~flashOnDone,      eventTimes(end+1) = flashDue; end %#ok<AGROW>
+    if flashOnDone && ~flashOffDone
+        eventTimes(end+1) = flashOffsetDue; %#ok<AGROW>
+    end
+    nextEvent = min(eventTimes);
+
+    doLetterOffset = ~letterOffsetDone && ...
+        abs(nextEvent - letterArrayOffsetDue) < p.ifi/4;
+    doFlashOn = ~flashOnDone && abs(nextEvent - flashDue) < p.ifi/4;
+    doFlashOff = flashOnDone && ~flashOffDone && ...
+        abs(nextEvent - flashOffsetDue) < p.ifi/4;
+
+    nextShowLetters = showLetters && ~doLetterOffset;
+    nextDistractorEffective = distractorEffective || doFlashOn;
+    nextFlashVisible = (flashVisible || doFlashOn) && ~doFlashOff;
+    drawStimulusDisplay(window, p, tr, nextDistractorEffective, ...
+        nextFlashVisible, nextShowLetters);
+    [~, eventOnset, ~, eventMissed] = ...
+        Screen('Flip', window, nextEvent - p.slack);
+
+    showLetters = nextShowLetters;
+    distractorEffective = nextDistractorEffective;
+    flashVisible = nextFlashVisible;
+
+    if doLetterOffset
+        letterOffsetDone = true;
+        result.LetterArrayOffsetOnset = eventOnset;
+        result.LetterArrayOffsetMissed = eventMissed;
+    end
+    if doFlashOn
+        flashOnDone = true;
+        result.FlashPresented = true;
+        result.ActualFlashOnset = eventOnset;
+        result.ActualFlashDelayMs = ...
+            (eventOnset - result.ShiftCueOnset) * 1000;
+        result.FlashOnsetMissed = eventMissed;
+        flashOffsetDue = eventOnset + p.FlashDurationFrames * p.ifi;
+    end
+    if doFlashOff
+        flashOffDone = true;
+        result.FlashOffsetOnset = eventOnset;
+        result.FlashOffsetMissed = eventMissed;
+    end
+end
 
 % Check the response queue only after the obligatory flash. A response made
 % before the flash is still retained with its original timestamp and RT.
@@ -727,23 +773,24 @@ drawFixation(window, p);
 end
 
 
-function drawStimulusDisplay(window, p, tr, distractorEffective, flashVisible)
+function drawStimulusDisplay(window, p, tr, distractorEffective, ...
+    flashVisible, showLetters)
 drawBaseDisplay(window, p, 0);
 
-% Letter arrays are unconditional: target onset, flash, post-flash, and the
-% remaining response window all use the same arrays in the same color.
-if tr.InitialLocation == 1
-    leftArray  = tr.AttendedArray;
-    rightArray = tr.UnattendedArray;
-else
-    leftArray  = tr.UnattendedArray;
-    rightArray = tr.AttendedArray;
+if showLetters
+    if tr.InitialLocation == 1
+        leftArray  = tr.AttendedArray;
+        rightArray = tr.UnattendedArray;
+    else
+        leftArray  = tr.UnattendedArray;
+        rightArray = tr.AttendedArray;
+    end
+    Screen('TextSize', window, p.ArrayTextSizePx);
+    drawCenteredTextAt(window, leftArray, p.LocationXY(1, 1), ...
+        p.LocationXY(1, 2) + p.ArrayYOffsetPx, p.ForegroundColor);
+    drawCenteredTextAt(window, rightArray, p.LocationXY(2, 1), ...
+        p.LocationXY(2, 2) + p.ArrayYOffsetPx, p.ForegroundColor);
 end
-Screen('TextSize', window, p.ArrayTextSizePx);
-drawCenteredTextAt(window, leftArray, p.LocationXY(1, 1), ...
-    p.LocationXY(1, 2) + p.ArrayYOffsetPx, p.ForegroundColor);
-drawCenteredTextAt(window, rightArray, p.LocationXY(2, 1), ...
-    p.LocationXY(2, 2) + p.ArrayYOffsetPx, p.ForegroundColor);
 
 targetXY = p.LocationXY(tr.TargetLocation, :) + [0, p.LandoltYOffsetPx];
 distractorXY = p.LocationXY(tr.DistractorLocation, :) + [0, p.LandoltYOffsetPx];
@@ -966,6 +1013,8 @@ result = struct( ...
     'ShiftCueVBL', NaN, ...
     'ShiftCueOnset', NaN, ...
     'ShiftCueMissed', NaN, ...
+    'LetterArrayOffsetOnset', NaN, ...
+    'LetterArrayOffsetMissed', NaN, ...
     'ScheduledFlashOnset', NaN, ...
     'ActualFlashOnset', NaN, ...
     'ActualFlashDelayMs', NaN, ...
