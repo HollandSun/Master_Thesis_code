@@ -49,11 +49,8 @@ p.InitialFixationSeconds        = 0.500;
 p.SpatialCueSeconds            = 0.250;
 p.PostSpatialCueRangeSeconds   = [0.500, 1.500];
 p.ResponseDeadlineSeconds      = 1.500;
-% FLASH SETTINGS: change these two values to adjust duration and contrast.
-% Duration is an integer number of monitor frames. Contrast 0 matches the
-% gray background; contrast 1 matches the ordinary black Landolt-C.
-p.FlashDurationFrames          = 1;
-p.FlashContrast                = 0.50;
+% Both Landolt-Cs flash pure white for five monitor frames.
+p.FlashDurationFrames          = 5;
 p.InterTrialIntervalSeconds    = 1.000;
 p.QuitPressCount               = 3;
 p.QuitMaxInterPressSeconds     = 0.500;
@@ -80,17 +77,15 @@ end
 %% Display and stimulus settings
 p.BackgroundColor      = [128, 128, 128];
 p.ForegroundColor      = [0, 0, 0];
-% Convert FlashContrast into a gray Landolt-C RGB value.
-p.FlashLandoltColor    = round(p.BackgroundColor + p.FlashContrast .* ...
-    (p.ForegroundColor - p.BackgroundColor));
-p.PlaceholderRadiusPx  = 220;
-p.PlaceholderLinePx    = 4;
-p.SpatialCueLinePx     = 11;
+p.FlashLandoltColor    = [255, 255, 255];
+p.PlaceholderRadiusPx  = 260;
+p.PlaceholderLinePx    = 5;
+p.SpatialCueLinePx     = 13;
 p.LandoltOuterRadiusPx = 15;
 p.LandoltInnerRadiusPx = 8;
 p.LandoltGapHalfPx     = 4;
-p.LandoltYOffsetPx     = 35;
-p.ArrayYOffsetPx       = -40;
+p.LandoltYOffsetPx     = 105;
+p.ArrayYOffsetPx       = -105;
 p.ArrayTextSizePx      = 64;
 p.InstructionTextSize  = 30;
 
@@ -534,9 +529,9 @@ result.ScheduledFlashOnset = flashDue;
 result.ResponseDeadline = responseDeadline;
 
 % Flash is never cancelled by an early response. At flash onset, both Cs
-% turn gray simultaneously and the distractor becomes response-effective;
-% the letter arrays remain exactly the same. The gray display lasts for the
-% configured number of frames.
+% turn pure white simultaneously and the distractor becomes response-effective;
+% the letter arrays remain exactly the same. The white display lasts five
+% monitor frames.
 drawStimulusDisplay(window, p, tr, true, true);
 [~, result.ActualFlashOnset, ~, result.FlashOnsetMissed] = ...
     Screen('Flip', window, flashDue - p.slack);
