@@ -373,6 +373,7 @@ for t = 1:p.TrialsPerBlock
         makeLetterArrays(tr.TrialTypeCode);
     trials(t) = tr;
 end
+end
 
 
 function cellCounts = balancedFactorCellCounts(nTrials, nDelays)
