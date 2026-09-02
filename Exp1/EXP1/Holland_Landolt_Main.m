@@ -533,9 +533,10 @@ responseDeadline = result.ShiftCueOnset + p.ResponseDeadlineSeconds;
 result.ScheduledFlashOnset = flashDue;
 result.ResponseDeadline = responseDeadline;
 
-% Flash is never cancelled by an early response. At flash onset, the
-% distractor becomes response-effective and gray; the letter arrays remain
-% exactly the same. The gray C lasts for the configured number of frames.
+% Flash is never cancelled by an early response. At flash onset, both Cs
+% turn gray simultaneously and the distractor becomes response-effective;
+% the letter arrays remain exactly the same. The gray display lasts for the
+% configured number of frames.
 drawStimulusDisplay(window, p, tr, true, true);
 [~, result.ActualFlashOnset, ~, result.FlashOnsetMissed] = ...
     Screen('Flip', window, flashDue - p.slack);
@@ -751,17 +752,19 @@ drawCenteredTextAt(window, rightArray, p.LocationXY(2, 1), ...
 
 targetXY = p.LocationXY(tr.TargetLocation, :) + [0, p.LandoltYOffsetPx];
 distractorXY = p.LocationXY(tr.DistractorLocation, :) + [0, p.LandoltYOffsetPx];
-drawLandoltC(window, p, targetXY, tr.TargetDirection, p.ForegroundColor);
 if distractorEffective
     distractorDirection = tr.DistractorDirection;
 else
     distractorDirection = tr.NeutralDirection;
 end
 if flashVisible
+    targetColor = p.FlashLandoltColor;
     distractorColor = p.FlashLandoltColor;
 else
+    targetColor = p.ForegroundColor;
     distractorColor = p.ForegroundColor;
 end
+drawLandoltC(window, p, targetXY, tr.TargetDirection, targetColor);
 drawLandoltC(window, p, distractorXY, distractorDirection, distractorColor);
 end
 
