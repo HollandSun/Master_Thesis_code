@@ -11,8 +11,8 @@ function p = Holland_Landolt_Exp2
 % participant reports the Landolt-C in that same red circle.
 %
 % Response mapping:
-%   Z = left-facing Landolt-C
-%   M = right-facing Landolt-C
+%   Z = upward-facing Landolt-C
+%   M = downward-facing Landolt-C
 %   ESCAPE three times rapidly = end the experiment early
 
 AssertOpenGL;
@@ -35,7 +35,7 @@ if ~exist(dataDir, 'dir'), mkdir(dataDir); end
 if ~exist(diaryDir, 'dir'), mkdir(diaryDir); end
 
 p.ExperimentName = 'AttentionShift_Landolt_Exp2';
-p.ScriptVersion = '1.1_frame_based_task_timing';
+p.ScriptVersion = '1.3_up_down_equalized_colors';
 p.Subject = subjectNumber;
 p.SessionStamp = sessionStamp;
 p.RandomStateAtStart = rng;
@@ -77,20 +77,30 @@ p.Timing.QuitMaxInterPressSeconds = 0.500;
 %  =====================================================================
 p.Stimulus.BackgroundColor = [128, 128, 128];
 p.Stimulus.FixationColor = [0, 0, 0];
-p.Stimulus.NeutralCircleColor = [255, 255, 0]; % yellow
-p.Stimulus.ShiftCueColor = [0, 114, 255];       % blue
-p.Stimulus.HoldCueColor = [255, 0, 0];          % red
+% Muted yellow/blue/red with approximately matched digital luminance
+% (Rec.709 luma about 185-188). Physical isoluminance still requires
+% calibration on the actual experiment monitor.
+p.Stimulus.NeutralCircleColor = [210, 195, 60]; % yellow
+p.Stimulus.ShiftCueColor = [110, 200, 255];      % blue
+p.Stimulus.HoldCueColor = [255, 175, 120];       % red
 p.Stimulus.CircleOutlineColor = [0, 0, 0];
 p.Stimulus.LandoltColor = [0, 0, 0];
-p.Stimulus.FeedbackCorrectColor = [0, 170, 0];
-p.Stimulus.FeedbackIncorrectColor = [200, 0, 0];
+% Feedback identity is carried by shape, so all outcomes use equal contrast.
+p.Stimulus.FeedbackCorrectColor = [0, 0, 0];
+p.Stimulus.FeedbackIncorrectColor = [0, 0, 0];
+p.Stimulus.FeedbackMissColor = [0, 0, 0];
 
-% Feedback content is deliberately editable independently of scoring.
+% Fixation and all three feedback symbols are editable here.
+p.Stimulus.FixationText = '+';
 p.Stimulus.FeedbackCorrectText = '+';
 p.Stimulus.FeedbackIncorrectText = '-';
+p.Stimulus.FeedbackMissText = '-';
+% Correct/incorrect use the exact fixation coordinates. A miss draws two
+% copies at equal horizontal distances on either side of those coordinates.
+p.Stimulus.FeedbackMissHorizontalOffsetPx = 45;
 
-p.Stimulus.HorizontalOffsetPx = 430;
-p.Stimulus.CircleRadiusPx = 260;
+p.Stimulus.HorizontalOffsetPx = 480;
+p.Stimulus.CircleRadiusPx = 230;
 p.Stimulus.CircleOutlineWidthPx = 5;
 p.Stimulus.LandoltOuterRadiusPx = 15;
 p.Stimulus.LandoltInnerRadiusPx = 8;
@@ -323,6 +333,11 @@ timingValues = [p.Timing.FixationSeconds, ...
 if any(timingValues < 0)
     error('Timing values cannot be negative.');
 end
+if ~isscalar(p.Stimulus.FeedbackMissHorizontalOffsetPx) || ...
+        ~isfinite(p.Stimulus.FeedbackMissHorizontalOffsetPx) || ...
+        p.Stimulus.FeedbackMissHorizontalOffsetPx < 0
+    error('FeedbackMissHorizontalOffsetPx must be one non-negative value.');
+end
 end
 
 
@@ -519,7 +534,7 @@ end
 
 
 function values = balancedBinaryWithinCells(rows)
-% Balance target left/right directions within Trial Type x Congruency.
+% Balance target up/down directions within Trial Type x Congruency.
 [~, ~, groupIndex] = unique(rows, 'rows');
 values = zeros(1, size(rows, 1));
 oddGroups = find(mod(accumarray(groupIndex, 1), 2) == 1);
@@ -632,11 +647,11 @@ else
     result.TimedOut = false;
     if responseCode == p.Key.Z
         result.ResponseKey = 'z';
-        result.ResponseDirection = 'left';
+        result.ResponseDirection = 'up';
         result.Accuracy = double(tr.TargetDirectionCode == 1);
     elseif responseCode == p.Key.M
         result.ResponseKey = 'm';
-        result.ResponseDirection = 'right';
+        result.ResponseDirection = 'down';
         result.Accuracy = double(tr.TargetDirectionCode == 2);
     end
 end
@@ -659,13 +674,20 @@ if quitRequested
     return;
 end
 
-% 5. Per-trial feedback. Timeouts use the editable incorrect symbol.
-if result.Accuracy == 1
+% 5. Per-trial feedback replaces fixation at the same central position.
+% A timeout/miss is represented by two symmetric copies of its symbol.
+if result.TimedOut
+    result.FeedbackType = 'miss';
+    result.FeedbackText = [p.Stimulus.FeedbackMissText, ' ', ...
+        p.Stimulus.FeedbackMissText];
+elseif result.Accuracy == 1
+    result.FeedbackType = 'correct';
     result.FeedbackText = p.Stimulus.FeedbackCorrectText;
 else
+    result.FeedbackType = 'incorrect';
     result.FeedbackText = p.Stimulus.FeedbackIncorrectText;
 end
-drawFeedback(window, p, result.Accuracy == 1);
+drawFeedback(window, p, result.FeedbackType);
 [~, result.FeedbackOnset, ~, result.FeedbackMissed] = ...
     Screen('Flip', window, feedbackDue-p.slack);
 
@@ -878,12 +900,12 @@ rOuter = p.Stimulus.LandoltOuterRadiusPx+1;
 rInner = p.Stimulus.LandoltInnerRadiusPx-1;
 g = p.Stimulus.LandoltGapHalfWidthPx;
 switch directionCode
-    case 1
-        gapRect = [cx-rOuter, cy-g, cx-rInner, cy+g];
-    case 2
-        gapRect = [cx+rInner, cy-g, cx+rOuter, cy+g];
+    case 1 % upward-facing: gap opens upward
+        gapRect = [cx-g, cy-rOuter, cx+g, cy-rInner];
+    case 2 % downward-facing: gap opens downward
+        gapRect = [cx-g, cy+rInner, cx+g, cy+rOuter];
     otherwise
-        error('Exp2 Landolt-C direction must be left (1) or right (2).');
+        error('Exp2 Landolt-C direction must be up (1) or down (2).');
 end
 Screen('FillRect', window, surroundingColor, gapRect);
 end
@@ -891,22 +913,33 @@ end
 
 function drawFixation(window, p)
 Screen('TextSize', window, p.Stimulus.FixationTextSizePx);
-drawCenteredTextAt(window, '+', p.Stimulus.CenterXY(1), ...
+drawCenteredTextAt(window, p.Stimulus.FixationText, ...
+    p.Stimulus.CenterXY(1), ...
     p.Stimulus.CenterXY(2), p.Stimulus.FixationColor);
 end
 
 
-function drawFeedback(window, p, correct)
+function drawFeedback(window, p, feedbackType)
 Screen('FillRect', window, p.Stimulus.BackgroundColor);
 Screen('TextSize', window, p.Stimulus.FeedbackTextSizePx);
-if correct
-    feedbackText = p.Stimulus.FeedbackCorrectText;
-    feedbackColor = p.Stimulus.FeedbackCorrectColor;
-else
-    feedbackText = p.Stimulus.FeedbackIncorrectText;
-    feedbackColor = p.Stimulus.FeedbackIncorrectColor;
+cx = p.Stimulus.CenterXY(1);
+cy = p.Stimulus.CenterXY(2);
+switch feedbackType
+    case 'correct'
+        drawCenteredTextAt(window, p.Stimulus.FeedbackCorrectText, ...
+            cx, cy, p.Stimulus.FeedbackCorrectColor);
+    case 'incorrect'
+        drawCenteredTextAt(window, p.Stimulus.FeedbackIncorrectText, ...
+            cx, cy, p.Stimulus.FeedbackIncorrectColor);
+    case 'miss'
+        offset = p.Stimulus.FeedbackMissHorizontalOffsetPx;
+        drawCenteredTextAt(window, p.Stimulus.FeedbackMissText, ...
+            cx-offset, cy, p.Stimulus.FeedbackMissColor);
+        drawCenteredTextAt(window, p.Stimulus.FeedbackMissText, ...
+            cx+offset, cy, p.Stimulus.FeedbackMissColor);
+    otherwise
+        error('Unknown feedback type: %s', feedbackType);
 end
-DrawFormattedText(window, feedbackText, 'center', 'center', feedbackColor);
 end
 
 
@@ -925,7 +958,7 @@ message = sprintf(['Block %d of %d\n\n' ...
     'First look at the single yellow circle.\n\n' ...
     'BLUE = SHIFT: report the Landolt-C in the opposite yellow circle.\n' ...
     'RED = HOLD: report the Landolt-C in the red circle.\n\n' ...
-    'Z = left gap, M = right gap.\n' ...
+    'Z = upward gap, M = downward gap.\n' ...
     'Press ESCAPE three times rapidly to end early.\n\n' ...
     'Press SPACE to begin.'], blockNumber, p.Design.NumBlocks);
 DrawFormattedText(window, message, 'center', 'center', ...
@@ -1081,6 +1114,7 @@ result = struct( ...
     'AnticipatoryResponseDetected', false, ...
     'TargetOnlyOnset', NaN, ...
     'TargetOnlyMissed', NaN, ...
+    'FeedbackType', '', ...
     'FeedbackText', '', ...
     'FeedbackOnset', NaN, ...
     'FeedbackMissed', NaN);
