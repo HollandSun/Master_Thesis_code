@@ -1,5 +1,19 @@
 function p = Holland_Landolt_Exp2
 % Holland_Landolt_Exp2
+%
+% Exp2 sequence:
+%   fixation -> one location cue -> two yellow circles -> task screen ->
+%   target-location retention -> trial feedback.
+%
+% On a SHIFT trial, the initially attended circle turns blue and the
+% participant reports the Landolt-C in the opposite yellow circle.
+% On a HOLD trial, the initially attended circle turns red and the
+% participant reports the Landolt-C in that same red circle.
+%
+% Response mapping:
+%   Z = upward-facing Landolt-C
+%   M = downward-facing Landolt-C
+%   ESCAPE three times rapidly = end the experiment early
 
 AssertOpenGL;
 KbName('UnifyKeyNames');
