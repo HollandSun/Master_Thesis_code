@@ -15,7 +15,7 @@ if ~exist(dataDir, 'dir'), mkdir(dataDir); end
 if ~exist(diaryDir, 'dir'), mkdir(diaryDir); end
 
 p.ExperimentName = 'AttentionShift_Landolt_Exp';
-p.ScriptVersion = '1.7';
+p.ScriptVersion = '1.8';
 p.Subject = subjectNumber;
 p.SessionStamp = sessionStamp;
 p.RandomStateAtStart = rng;
@@ -74,6 +74,7 @@ p.Stimulus.FeedbackMissText = '------';
 p.Stimulus.HorizontalOffsetPx = 360;
 p.Stimulus.CircleRadiusPx = 200;
 p.Stimulus.CircleOutlineWidthPx = 5;
+p.Stimulus.InheritedCueOutlineWidthPx = 16;
 p.Stimulus.LandoltOuterRadiusPx = 18;
 p.Stimulus.LandoltInnerRadiusPx = 10;
 p.Stimulus.LandoltGapHalfWidthPx = 5;
@@ -551,8 +552,9 @@ drawFixationOnly(window, p);
 [fixVBL, result.FixationOnset, ~, result.FixationMissed] = ...
     Screen('Flip', window);
 
-% 2. One yellow circle at the location inherited from the previous trial.
-drawSingleLocationCue(window, p, tr.CueLocation);
+% 2. Both yellow circles; a thick outline marks the inherited location.
+% The first trial uses the randomly selected initial location.
+drawInheritedLocationCue(window, p, tr.CueLocation);
 [~, result.SingleCueOnset, ~, result.SingleCueMissed] = ...
     Screen('Flip', window, ...
     fixVBL+p.Timing.FixationSeconds-p.slack);
@@ -779,10 +781,15 @@ drawFixation(window, p);
 end
 
 
-function drawSingleLocationCue(window, p, cueLocation)
+function drawInheritedLocationCue(window, p, cueLocation)
 Screen('FillRect', window, p.Stimulus.BackgroundColor);
-drawFilledCircle(window, p, cueLocation, ...
-    p.Stimulus.NeutralCircleColor);
+for side = 1:2
+    drawFilledCircle(window, p, side, p.Stimulus.NeutralCircleColor);
+end
+% Only the inherited location receives the thicker black outline.
+Screen('FrameOval', window, p.Stimulus.CircleOutlineColor, ...
+    p.Stimulus.CircleRects(cueLocation, :), ...
+    p.Stimulus.InheritedCueOutlineWidthPx);
 drawFixation(window, p);
 end
 
@@ -899,7 +906,7 @@ function drawBlockStart(window, p, blockNumber)
 Screen('FillRect', window, p.Stimulus.BackgroundColor);
 Screen('TextSize', window, p.Stimulus.InstructionTextSizePx);
 message = sprintf(['Block %d of %d\n\n' ...
-    'First look at the single yellow circle.\n\n' ...
+    'First look at the yellow circle with the thick black outline.\n\n' ...
     'BLUE = SHIFT: report the Landolt-C in the opposite yellow circle.\n' ...
     'RED = HOLD: report the Landolt-C in the red circle.\n\n' ...
     'Z = upward gap, M = downward gap.\n' ...
