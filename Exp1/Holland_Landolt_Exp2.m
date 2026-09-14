@@ -15,7 +15,7 @@ if ~exist(dataDir, 'dir'), mkdir(dataDir); end
 if ~exist(diaryDir, 'dir'), mkdir(diaryDir); end
 
 p.ExperimentName = 'AttentionShift_Landolt_Exp';
-p.ScriptVersion = '1.6';
+p.ScriptVersion = '1.7';
 p.Subject = subjectNumber;
 p.SessionStamp = sessionStamp;
 p.RandomStateAtStart = rng;
@@ -43,8 +43,8 @@ p.Timing.TaskDelayRandomUnitFrames = 1;   % random step size
 % available response window is 90-30 frames (1.5-0.5 s at 60 Hz).
 p.Timing.TwoCircleToResponseDeadlineFrames = 120;
 
-% Feedback appears immediately after a response, or at the response
-% deadline if no response is made.
+% A response only records the answer. Keep the full task display visible
+% until the common response deadline, then replace it with feedback.
 p.Timing.FeedbackSeconds = 0.500;
 p.Timing.QuitMaxInterPressSeconds = 0.500;
 
@@ -623,8 +623,8 @@ else
 end
 KbQueueStop(p.KeyboardIndex);
 
-% 5. Show feedback on the next refresh after a response or timeout.
-% Every outcome is a single centered string of six characters.
+% 5. Prepare feedback in the back buffer; the visible task stays unchanged
+% until the deadline flip. Every outcome uses six centered characters.
 if result.TimedOut
     result.FeedbackType = 'miss';
     result.FeedbackText = p.Stimulus.FeedbackMissText;
@@ -636,8 +636,17 @@ else
     result.FeedbackText = p.Stimulus.FeedbackIncorrectText;
 end
 drawFeedback(window, p, result.FeedbackType);
+% No intermediate flip: both circles and Landolt Cs remain on screen.
+% Keep ESCAPE handling active while waiting after an early response.
+quitRequested = waitUntilOrQuit(p, result.ResponseDeadline-leadTime);
+if quitRequested
+    result.ResponseKey = 'task-abort';
+    result.ResponseDirection = '';
+    result.Accuracy = NaN;
+    return;
+end
 [~, result.FeedbackOnset, ~, result.FeedbackMissed] = ...
-    Screen('Flip', window);
+    Screen('Flip', window, result.ResponseDeadline-p.slack);
 
 feedbackEnd = result.FeedbackOnset+p.Timing.FeedbackSeconds;
 quitRequested = waitUntilOrQuit(p, feedbackEnd);
