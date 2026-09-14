@@ -15,7 +15,7 @@ if ~exist(dataDir, 'dir'), mkdir(dataDir); end
 if ~exist(diaryDir, 'dir'), mkdir(diaryDir); end
 
 p.ExperimentName = 'AttentionShift_Landolt_Exp';
-p.ScriptVersion = '1.5';
+p.ScriptVersion = '1.6';
 p.Subject = subjectNumber;
 p.SessionStamp = sessionStamp;
 p.RandomStateAtStart = rng;
@@ -31,7 +31,7 @@ p.Design.QuitPressCount = 3;
 %% =====================================================================
 %  TIMING PARAMETERS
 p.Timing.FixationSeconds = 0.800;
-p.Timing.SingleLocationCueSeconds = 0.250;
+p.Timing.SingleLocationCueSeconds = 0.500;
 
 % Frame-based task timing. The randomly sampled task delay is selected
 % uniformly from MIN:RANDOM_UNIT:MAX, inclusive. At 60 Hz the defaults are
@@ -43,10 +43,8 @@ p.Timing.TaskDelayRandomUnitFrames = 1;   % random step size
 % available response window is 90-30 frames (1.5-0.5 s at 60 Hz).
 p.Timing.TwoCircleToResponseDeadlineFrames = 120;
 
-% A target-only circle remains through the common response deadline and
-% for this additional fixed interval. Feedback then appears on every
-% normally completed trial.
-p.Timing.TargetRetentionAfterDeadlineSeconds = 1.000;
+% Feedback appears immediately after a response, or at the response
+% deadline if no response is made.
 p.Timing.FeedbackSeconds = 0.500;
 p.Timing.QuitMaxInterPressSeconds = 0.500;
 
@@ -73,7 +71,7 @@ p.Stimulus.FeedbackCorrectText = '++++++';
 p.Stimulus.FeedbackIncorrectText = '+-+-+-';
 p.Stimulus.FeedbackMissText = '------';
 
-p.Stimulus.HorizontalOffsetPx = 480;
+p.Stimulus.HorizontalOffsetPx = 360;
 p.Stimulus.CircleRadiusPx = 200;
 p.Stimulus.CircleOutlineWidthPx = 5;
 p.Stimulus.LandoltOuterRadiusPx = 18;
@@ -301,7 +299,6 @@ if ~isscalar(frameDeadline) || ~isfinite(frameDeadline) || ...
 end
 timingValues = [p.Timing.FixationSeconds, ...
     p.Timing.SingleLocationCueSeconds, ...
-    p.Timing.TargetRetentionAfterDeadlineSeconds, ...
     p.Timing.FeedbackSeconds, ...
     p.Timing.QuitMaxInterPressSeconds];
 if any(timingValues < 0)
@@ -626,24 +623,7 @@ else
 end
 KbQueueStop(p.KeyboardIndex);
 
-% As soon as a response is made (or at timeout), remove the non-target
-% circle. The target-only screen then remains through the fixed common
-% deadline and for the configured post-deadline retention interval.
-drawTargetOnly(window, p, tr);
-[~, result.TargetOnlyOnset, ~, result.TargetOnlyMissed] = ...
-    Screen('Flip', window);
-
-feedbackDue = result.ResponseDeadline + ...
-    p.Timing.TargetRetentionAfterDeadlineSeconds;
-quitRequested = waitUntilOrQuit(p, feedbackDue-leadTime);
-if quitRequested
-    result.ResponseKey = 'task-abort';
-    result.ResponseDirection = '';
-    result.Accuracy = NaN;
-    return;
-end
-
-% 5. Per-trial feedback replaces fixation at the same central position.
+% 5. Show feedback on the next refresh after a response or timeout.
 % Every outcome is a single centered string of six characters.
 if result.TimedOut
     result.FeedbackType = 'miss';
@@ -657,7 +637,7 @@ else
 end
 drawFeedback(window, p, result.FeedbackType);
 [~, result.FeedbackOnset, ~, result.FeedbackMissed] = ...
-    Screen('Flip', window, feedbackDue-p.slack);
+    Screen('Flip', window);
 
 feedbackEnd = result.FeedbackOnset+p.Timing.FeedbackSeconds;
 quitRequested = waitUntilOrQuit(p, feedbackEnd);
@@ -827,18 +807,6 @@ drawLandoltC(window, p, targetXY, tr.TargetDirectionCode, ...
     p.Stimulus.LandoltColor, circleColors{tr.TargetLocation});
 drawLandoltC(window, p, distractorXY, tr.DistractorDirectionCode, ...
     p.Stimulus.LandoltColor, circleColors{tr.DistractorLocation});
-drawFixation(window, p);
-end
-
-
-function drawTargetOnly(window, p, tr)
-Screen('FillRect', window, p.Stimulus.BackgroundColor);
-if tr.TrialTypeCode == 1
-    targetCircleColor = p.Stimulus.NeutralCircleColor;
-else
-    targetCircleColor = p.Stimulus.HoldCueColor;
-end
-drawFilledCircle(window, p, tr.TargetLocation, targetCircleColor);
 drawFixation(window, p);
 end
 
@@ -1079,8 +1047,6 @@ result = struct( ...
     'Accuracy', NaN, ...
     'TimedOut', false, ...
     'AnticipatoryResponseDetected', false, ...
-    'TargetOnlyOnset', NaN, ...
-    'TargetOnlyMissed', NaN, ...
     'FeedbackType', '', ...
     'FeedbackText', '', ...
     'FeedbackOnset', NaN, ...
