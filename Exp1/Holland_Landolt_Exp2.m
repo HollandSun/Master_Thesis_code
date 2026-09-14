@@ -15,7 +15,7 @@ if ~exist(dataDir, 'dir'), mkdir(dataDir); end
 if ~exist(diaryDir, 'dir'), mkdir(diaryDir); end
 
 p.ExperimentName = 'AttentionShift_Landolt_Exp';
-p.ScriptVersion = '1.3';
+p.ScriptVersion = '1.5';
 p.Subject = subjectNumber;
 p.SessionStamp = sessionStamp;
 p.RandomStateAtStart = rng;
@@ -30,7 +30,7 @@ p.Design.QuitPressCount = 3;
 
 %% =====================================================================
 %  TIMING PARAMETERS
-p.Timing.FixationSeconds = 0.500;
+p.Timing.FixationSeconds = 0.800;
 p.Timing.SingleLocationCueSeconds = 0.250;
 
 % Frame-based task timing. The randomly sampled task delay is selected
@@ -54,12 +54,11 @@ p.Timing.QuitMaxInterPressSeconds = 0.500;
 %  STIMULUS PARAMETERS -- all colors, sizes, and positions are here
 p.Stimulus.BackgroundColor = [128, 128, 128];
 p.Stimulus.FixationColor = [0, 0, 0];
-% Muted yellow/blue/red with approximately matched digital luminance
-% (Rec.709 luma about 185-188). Physical isoluminance still requires
-% calibration on the actual experiment monitor.
+% Saturated blue/red cues for clearer color identity.
+% These RGB colors are not matched for luminance.
 p.Stimulus.NeutralCircleColor = [210, 195, 60]; % yellow
-p.Stimulus.ShiftCueColor = [110, 200, 255];      % blue
-p.Stimulus.HoldCueColor = [255, 175, 120];       % red
+p.Stimulus.ShiftCueColor = [60, 120, 240];      % blue
+p.Stimulus.HoldCueColor = [240, 65, 65];       % red
 p.Stimulus.CircleOutlineColor = [0, 0, 0];
 p.Stimulus.LandoltColor = [0, 0, 0];
 % Feedback identity is carried by shape, so all outcomes use equal contrast.
@@ -67,23 +66,21 @@ p.Stimulus.FeedbackCorrectColor = [0, 0, 0];
 p.Stimulus.FeedbackIncorrectColor = [0, 0, 0];
 p.Stimulus.FeedbackMissColor = [0, 0, 0];
 
-% Fixation and all three feedback symbols are editable here.
+% A large fixation cross marks trial onset; feedback uses six smaller
+% characters. Each complete string is centered at the same screen position.
 p.Stimulus.FixationText = '+';
-p.Stimulus.FeedbackCorrectText = '+';
-p.Stimulus.FeedbackIncorrectText = '-';
-p.Stimulus.FeedbackMissText = '-';
-% Correct/incorrect use the exact fixation coordinates. A miss draws two
-% copies at equal horizontal distances on either side of those coordinates.
-p.Stimulus.FeedbackMissHorizontalOffsetPx = 45;
+p.Stimulus.FeedbackCorrectText = '++++++';
+p.Stimulus.FeedbackIncorrectText = '+-+-+-';
+p.Stimulus.FeedbackMissText = '------';
 
 p.Stimulus.HorizontalOffsetPx = 480;
-p.Stimulus.CircleRadiusPx = 230;
+p.Stimulus.CircleRadiusPx = 200;
 p.Stimulus.CircleOutlineWidthPx = 5;
-p.Stimulus.LandoltOuterRadiusPx = 15;
-p.Stimulus.LandoltInnerRadiusPx = 8;
-p.Stimulus.LandoltGapHalfWidthPx = 4;
-p.Stimulus.FixationTextSizePx = 34;
-p.Stimulus.FeedbackTextSizePx = 64;
+p.Stimulus.LandoltOuterRadiusPx = 18;
+p.Stimulus.LandoltInnerRadiusPx = 10;
+p.Stimulus.LandoltGapHalfWidthPx = 5;
+p.Stimulus.FixationTextSizePx = 72;
+p.Stimulus.FeedbackTextSizePx = 48;
 p.Stimulus.InstructionTextSizePx = 30;
 
 validateParameters(p);
@@ -309,11 +306,6 @@ timingValues = [p.Timing.FixationSeconds, ...
     p.Timing.QuitMaxInterPressSeconds];
 if any(timingValues < 0)
     error('Timing values cannot be negative.');
-end
-if ~isscalar(p.Stimulus.FeedbackMissHorizontalOffsetPx) || ...
-        ~isfinite(p.Stimulus.FeedbackMissHorizontalOffsetPx) || ...
-        p.Stimulus.FeedbackMissHorizontalOffsetPx < 0
-    error('FeedbackMissHorizontalOffsetPx must be one non-negative value.');
 end
 end
 
@@ -652,11 +644,10 @@ if quitRequested
 end
 
 % 5. Per-trial feedback replaces fixation at the same central position.
-% A timeout/miss is represented by two symmetric copies of its symbol.
+% Every outcome is a single centered string of six characters.
 if result.TimedOut
     result.FeedbackType = 'miss';
-    result.FeedbackText = [p.Stimulus.FeedbackMissText, ' ', ...
-        p.Stimulus.FeedbackMissText];
+    result.FeedbackText = p.Stimulus.FeedbackMissText;
 elseif result.Accuracy == 1
     result.FeedbackType = 'correct';
     result.FeedbackText = p.Stimulus.FeedbackCorrectText;
@@ -909,11 +900,8 @@ switch feedbackType
         drawCenteredTextAt(window, p.Stimulus.FeedbackIncorrectText, ...
             cx, cy, p.Stimulus.FeedbackIncorrectColor);
     case 'miss'
-        offset = p.Stimulus.FeedbackMissHorizontalOffsetPx;
         drawCenteredTextAt(window, p.Stimulus.FeedbackMissText, ...
-            cx-offset, cy, p.Stimulus.FeedbackMissColor);
-        drawCenteredTextAt(window, p.Stimulus.FeedbackMissText, ...
-            cx+offset, cy, p.Stimulus.FeedbackMissColor);
+            cx, cy, p.Stimulus.FeedbackMissColor);
     otherwise
         error('Unknown feedback type: %s', feedbackType);
 end
@@ -921,10 +909,12 @@ end
 
 
 function drawCenteredTextAt(window, textString, cx, cy, color)
-bounds = Screen('TextBounds', window, textString);
-x = cx-RectWidth(bounds)/2;
-y = cy-RectHeight(bounds)/2;
-Screen('DrawText', window, textString, x, y, color);
+% Measure at an explicit origin and compensate for glyph-bearing offsets.
+% This centers the visible bounds, including for strings of only hyphens.
+[~, bounds] = Screen('TextBounds', window, textString, 0, 0, 0);
+x = cx-(bounds(1)+bounds(3))/2;
+y = cy-(bounds(2)+bounds(4))/2;
+Screen('DrawText', window, textString, x, y, color, [], 0);
 end
 
 
